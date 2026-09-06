@@ -17,6 +17,8 @@ import {
   MessageSquare, User, LogOut, Sparkles, Bell 
 } from 'lucide-react';
 
+const BACKEND_API_URL = import.meta.env.VITE_BACKEND_API_URL || 'http://localhost:5000';
+
 export function App() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [vendorProfile, setVendorProfile] = useState<VendorProfile | null>(null);
@@ -84,19 +86,60 @@ export function App() {
   };
 
   const handleAcceptBooking = async (bookingId: string) => {
-    if (!db) return;
-    await updateDoc(doc(db, 'bookings', bookingId), {
-      status: 'CONFIRMED',
-      acceptedAt: new Date().toISOString()
-    });
+    if (!vendorProfile) return;
+    try {
+      const res = await fetch(`${BACKEND_API_URL}/api/vendor/bookings/${bookingId}/respond`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'accept',
+          vendorId: vendorProfile.id
+        })
+      });
+      if (!res.ok && db) {
+        // Fallback to direct Firestore update
+        await updateDoc(doc(db, 'bookings', bookingId), {
+          status: 'Confirmed',
+          vendorAcceptedAt: new Date().toISOString()
+        });
+      }
+    } catch {
+      if (db) {
+        await updateDoc(doc(db, 'bookings', bookingId), {
+          status: 'Confirmed',
+          vendorAcceptedAt: new Date().toISOString()
+        });
+      }
+    }
   };
 
   const handleRejectBooking = async (bookingId: string) => {
-    if (!db) return;
-    await updateDoc(doc(db, 'bookings', bookingId), {
-      status: 'REJECTED',
-      rejectedAt: new Date().toISOString()
-    });
+    if (!vendorProfile) return;
+    try {
+      const res = await fetch(`${BACKEND_API_URL}/api/vendor/bookings/${bookingId}/respond`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'reject',
+          vendorId: vendorProfile.id,
+          reason: 'Vendor unavailable on requested schedule'
+        })
+      });
+      if (!res.ok && db) {
+        // Fallback to direct Firestore update
+        await updateDoc(doc(db, 'bookings', bookingId), {
+          status: 'Rejected',
+          rejectedAt: new Date().toISOString()
+        });
+      }
+    } catch {
+      if (db) {
+        await updateDoc(doc(db, 'bookings', bookingId), {
+          status: 'Rejected',
+          rejectedAt: new Date().toISOString()
+        });
+      }
+    }
   };
 
   const handleSaveServices = async (services: VendorServiceItem[]) => {
