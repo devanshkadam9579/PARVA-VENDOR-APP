@@ -27,6 +27,25 @@ export interface VendorAddon {
   description: string;
 }
 
+export interface VendorKycData {
+  aadhaarNumber?: string;
+  aadhaarFrontUrl?: string;
+  aadhaarBackUrl?: string;
+  panNumber?: string;
+  panUrl?: string;
+  gstNumber?: string;
+  licenseNumber?: string;
+  licenseUrl?: string;
+  registeredAddress?: string;
+  contactPerson?: string;
+  contactPhone?: string;
+  profilePicUrl?: string;
+  status: 'NOT_SUBMITTED' | 'PENDING_VERIFICATION' | 'VERIFIED' | 'REJECTED';
+  rejectionReason?: string;
+  submittedAt?: string;
+  verifiedAt?: string;
+}
+
 export interface VendorProfile {
   id: string;
   ownerUid: string;
@@ -45,6 +64,8 @@ export interface VendorProfile {
   rating: number;
   reviewCount: number;
   status: 'DRAFT' | 'PENDING_REVIEW' | 'ACTIVE' | 'SUSPENDED';
+  isVerified?: boolean;
+  kyc?: VendorKycData;
   images: string[];
   coverImage?: string;
   services: VendorServiceItem[];
