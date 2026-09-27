@@ -12,6 +12,8 @@ import { VendorBookingsManager } from './components/VendorBookingsManager';
 import { VendorServicesManager } from './components/VendorServicesManager';
 import { VendorAvailabilityManager } from './components/VendorAvailabilityManager';
 import { VendorEarnings } from './components/VendorEarnings';
+import { VendorChatModal } from './components/VendorChatModal';
+import { VendorMessagesView } from './components/VendorMessagesView';
 import { 
   LayoutDashboard, Calendar, Layers, DollarSign, Clock, 
   MessageSquare, User, LogOut, Sparkles, Bell 
@@ -23,7 +25,8 @@ export function App() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [vendorProfile, setVendorProfile] = useState<VendorProfile | null>(null);
   const [bookings, setBookings] = useState<VendorBooking[]>([]);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'bookings' | 'services' | 'availability' | 'earnings' | 'profile'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'bookings' | 'messages' | 'services' | 'availability' | 'earnings' | 'profile'>('dashboard');
+  const [chatBooking, setChatBooking] = useState<VendorBooking | null>(null);
   const [loading, setLoading] = useState(true);
 
   // 1. Firebase Auth Listener
@@ -195,18 +198,19 @@ export function App() {
           </div>
 
           <div className="hidden md:flex items-center gap-1 bg-[#faf5f8] p-1 rounded-2xl border border-[#f2e4ec]">
-            {(['dashboard', 'bookings', 'services', 'availability', 'earnings'] as const).map((tab) => (
+            {(['dashboard', 'bookings', 'messages', 'services', 'availability', 'earnings'] as const).map((tab) => (
               <button
                 key={tab}
                 type="button"
                 onClick={() => setActiveTab(tab)}
-                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold capitalize transition ${
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold capitalize transition flex items-center gap-1.5 ${
                   activeTab === tab
                     ? 'bg-white text-brand-primary shadow-xs'
                     : 'text-[#745b68] hover:text-[#1a0812]'
                 }`}
               >
-                {tab}
+                {tab === 'messages' && <MessageSquare size={13} />}
+                <span>{tab}</span>
               </button>
             ))}
           </div>
@@ -241,7 +245,17 @@ export function App() {
             bookings={bookings}
             onAcceptBooking={handleAcceptBooking}
             onRejectBooking={handleRejectBooking}
-            onOpenChat={(bId) => {}}
+            onOpenChat={(bId) => {
+              const found = bookings.find((b) => b.id === bId);
+              if (found) setChatBooking(found);
+            }}
+          />
+        )}
+
+        {activeTab === 'messages' && (
+          <VendorMessagesView
+            bookings={bookings}
+            vendor={vendorProfile}
           />
         )}
 
@@ -257,6 +271,7 @@ export function App() {
           <VendorAvailabilityManager
             busyDates={vendorProfile.busyDates || []}
             busySlots={vendorProfile.busySlots || {}}
+            bookings={bookings}
             onUpdateAvailability={handleUpdateAvailability}
           />
         )}
@@ -266,8 +281,18 @@ export function App() {
         )}
       </main>
 
+      {/* Direct Customer Chat Modal */}
+      {chatBooking && (
+        <VendorChatModal
+          booking={chatBooking}
+          vendor={vendorProfile}
+          isOpen={Boolean(chatBooking)}
+          onClose={() => setChatBooking(null)}
+        />
+      )}
+
       {/* Mobile Bottom Dock */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-[#f2e4ec] py-2 px-4 flex justify-around z-50">
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-[#f2e4ec] py-2 px-2 flex justify-around z-50">
         <button
           type="button"
           onClick={() => setActiveTab('dashboard')}
@@ -287,6 +312,16 @@ export function App() {
         >
           <Calendar size={18} />
           <span>Bookings</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('messages')}
+          className={`flex flex-col items-center gap-1 text-[10px] font-bold ${
+            activeTab === 'messages' ? 'text-brand-primary' : 'text-gray-400'
+          }`}
+        >
+          <MessageSquare size={18} />
+          <span>Chat</span>
         </button>
         <button
           type="button"
