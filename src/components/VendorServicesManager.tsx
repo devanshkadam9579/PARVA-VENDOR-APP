@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Plus, Edit2, CheckCircle, Trash2, Power, Upload, Image as ImageIcon, Sparkles, X } from 'lucide-react';
 import { VendorServiceItem } from '../types';
+import { compressImage } from '../lib/imageCompressor';
 
 export interface VendorServicesManagerProps {
   services: VendorServiceItem[];
@@ -31,25 +32,33 @@ export function VendorServicesManager({
     }
   };
 
-  const handleImageFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !editingService) return;
 
     setIsUploading(true);
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
+    try {
+      const result = await compressImage(file, { maxWidth: 1200, maxHeight: 1200, quality: 0.75 });
       const currentImages = editingService.images || [];
       setEditingService({
         ...editingService,
-        images: [result, ...currentImages.filter(img => img !== result)]
+        images: [result.dataUrl, ...currentImages.filter(img => img !== result.dataUrl)]
       });
+    } catch (err) {
+      console.error('Image compression error:', err);
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const currentImages = editingService.images || [];
+        setEditingService({
+          ...editingService,
+          images: [result, ...currentImages.filter(img => img !== result)]
+        });
+      };
+      reader.readAsDataURL(file);
+    } finally {
       setIsUploading(false);
-    };
-    reader.onerror = () => {
-      setIsUploading(false);
-    };
-    reader.readAsDataURL(file);
+    }
   };
 
   const handleSaveModal = async (e: React.FormEvent) => {

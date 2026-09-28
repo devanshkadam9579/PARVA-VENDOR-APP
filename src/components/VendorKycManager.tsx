@@ -5,6 +5,7 @@ import {
   Clock, AlertTriangle, Eye, Check
 } from 'lucide-react';
 import { VendorKycData, VendorProfile } from '../types';
+import { compressImage } from '../lib/imageCompressor';
 
 export interface VendorKycManagerProps {
   vendor: VendorProfile;
@@ -30,22 +31,44 @@ export function VendorKycManager({ vendor, onUpdateKyc }: VendorKycManagerProps)
 
   const [formData, setFormData] = useState<VendorKycData>(initialKyc);
   const [saving, setSaving] = useState(false);
+  const [compressingField, setCompressingField] = useState<string | null>(null);
+  const [compressionStats, setCompressionStats] = useState<Record<string, string>>({});
   const [successMsg, setSuccessMsg] = useState('');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
 
-  const handleFileUpload = (field: keyof VendorKycData, e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (field: keyof VendorKycData, e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
+    setCompressingField(field);
+    try {
+      // Compress image from 5MB-10MB to ~40-60KB safely
+      const result = await compressImage(file, { maxWidth: 1200, maxHeight: 1200, quality: 0.72 });
+      const origKb = Math.round(result.originalSizeBytes / 1024);
+      const compKb = Math.round(result.compressedSizeBytes / 1024);
+      
       setFormData(prev => ({
         ...prev,
-        [field]: dataUrl
+        [field]: result.dataUrl
       }));
-    };
-    reader.readAsDataURL(file);
+      setCompressionStats(prev => ({
+        ...prev,
+        [field]: `${origKb}KB → ${compKb}KB (-${result.reductionPercentage}%)`
+      }));
+    } catch (err) {
+      console.error('Image compression error:', err);
+      // Fallback
+      const reader = new FileReader();
+      reader.onload = () => {
+        setFormData(prev => ({
+          ...prev,
+          [field]: reader.result as string
+        }));
+      };
+      reader.readAsDataURL(file);
+    } finally {
+      setCompressingField(null);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {

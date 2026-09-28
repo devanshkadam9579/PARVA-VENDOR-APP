@@ -216,9 +216,22 @@ export function App() {
 
   const handleUpdateKyc = async (kycData: VendorKycData) => {
     if (!vendorProfile || !db) return;
+    const now = new Date().toISOString();
+
+    // 1. Save full KYC payload to dedicated vendor_kyc collection (isolated doc)
+    await setDoc(doc(db, 'vendor_kyc', vendorProfile.id), {
+      ...kycData,
+      vendorId: vendorProfile.id,
+      vendorName: vendorProfile.name,
+      vendorCategory: vendorProfile.category,
+      updatedAt: now
+    }, { merge: true });
+
+    // 2. Save KYC summary & status to vendors collection
     await updateDoc(doc(db, 'vendors', vendorProfile.id), {
       kyc: kycData,
-      updatedAt: new Date().toISOString()
+      'kyc.status': kycData.status || 'PENDING_VERIFICATION',
+      updatedAt: now
     });
     setVendorProfile(prev => prev ? { ...prev, kyc: kycData } : null);
   };
