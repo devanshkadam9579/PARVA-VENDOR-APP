@@ -21,6 +21,7 @@ import {
   MessageSquare, User, LogOut, Sparkles, Bell, ShieldCheck,
   CheckCircle2, AlertCircle
 } from 'lucide-react';
+import { authenticatedFetch } from './lib/apiClient';
 
 const BACKEND_API_URL = import.meta.env.VITE_BACKEND_API_URL || 'http://localhost:5000';
 
@@ -59,31 +60,21 @@ export function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. Fetch Vendor Bookings Listener (Broadened to ensure 100% sync)
+  // 2. Fetch Authoritative Vendor Bookings Listener (Scoped to Verified Vendor ID)
   useEffect(() => {
     if (!vendorProfile || !db) return;
     
-    // Listen to all bookings collection to ensure matching whether vendorId or vendor.name or vendorOwnerUid is saved
-    const bookingsColl = collection(db, 'bookings');
-    const unsubscribe = onSnapshot(bookingsColl, (snapshot) => {
+    // Authoritative scoped listener: only sync bookings explicitly assigned to this vendor
+    const currentVendorId = vendorProfile.id;
+    const q = query(
+      collection(db, 'bookings'),
+      where('vendorId', '==', currentVendorId)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       const bList: VendorBooking[] = [];
-      const currentVendorId = vendorProfile.id;
-      const currentVendorName = vendorProfile.name?.toLowerCase().trim();
-      const currentOwnerUid = currentUser?.uid;
-
       snapshot.forEach((docSnap) => {
-        const data = docSnap.data() as any;
-        const bVendorId = data.vendorId || data.vendor?.id;
-        const bVendorName = (data.vendor?.name || data.vendorName || '')?.toLowerCase().trim();
-        const bVendorOwner = data.vendorOwnerUid || data.vendor?.ownerUid;
-
-        if (
-          bVendorId === currentVendorId || 
-          (currentOwnerUid && bVendorOwner === currentOwnerUid) ||
-          (currentVendorName && bVendorName && (bVendorName === currentVendorName || bVendorName.includes(currentVendorName) || currentVendorName.includes(bVendorName)))
-        ) {
-          bList.push({ id: docSnap.id, ...data });
-        }
+        bList.push({ id: docSnap.id, ...docSnap.data() as any });
       });
 
       // Sort newest first
@@ -98,6 +89,8 @@ export function App() {
       }
 
       setBookings(bList);
+    }, (err) => {
+      console.warn('[Vendor Bookings Sync Notice]:', err?.message);
     });
 
     return () => unsubscribe();
@@ -125,7 +118,7 @@ export function App() {
   const handleAcceptBooking = async (bookingId: string) => {
     if (!vendorProfile) return;
     try {
-      const res = await fetch(`${BACKEND_API_URL}/api/vendor/bookings/${bookingId}/respond`, {
+      const res = await authenticatedFetch(`${BACKEND_API_URL}/api/vendor/bookings/${bookingId}/respond`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -152,7 +145,7 @@ export function App() {
   const handleRejectBooking = async (bookingId: string) => {
     if (!vendorProfile) return;
     try {
-      const res = await fetch(`${BACKEND_API_URL}/api/vendor/bookings/${bookingId}/respond`, {
+      const res = await authenticatedFetch(`${BACKEND_API_URL}/api/vendor/bookings/${bookingId}/respond`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
