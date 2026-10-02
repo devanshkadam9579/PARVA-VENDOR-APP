@@ -71,23 +71,30 @@ export function VendorChatModal({
       const chatRef = collection(db, 'chats');
       const q = query(
         chatRef,
-        where('bookingId', '==', booking.id),
-        orderBy('createdAt', 'asc')
+        where('bookingId', '==', booking.id)
       );
 
       const unsubscribe = onSnapshot(q, (snapshot) => {
         if (!snapshot.empty) {
-          const list: ChatMessage[] = [];
+          const list: (ChatMessage & { _millis?: number })[] = [];
           snapshot.forEach((doc) => {
             const data = doc.data();
+            let millis = 0;
+            if (data.createdAt?.toDate) {
+              millis = data.createdAt.toDate().getTime();
+            } else if (data.createdAt) {
+              try { millis = new Date(data.createdAt).getTime(); } catch (e) {}
+            }
             list.push({
               id: doc.id,
               sender: data.sender || 'vendor',
               senderName: data.senderName,
               text: data.text || '',
-              time: data.createdAt?.toDate ? data.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now'
+              time: data.createdAt?.toDate ? data.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now',
+              _millis: millis
             });
           });
+          list.sort((a, b) => (a._millis || 0) - (b._millis || 0));
           setMessages(list);
         } else {
           // Default initial greeting if no messages yet
@@ -133,6 +140,7 @@ export function VendorChatModal({
         await addDoc(collection(db, 'chats'), {
           bookingId: booking.id,
           vendorId: vendor.id,
+          userId: booking.customerUid || (booking as any).userId || '',
           sender: 'vendor',
           senderName: vendor.name,
           text,
