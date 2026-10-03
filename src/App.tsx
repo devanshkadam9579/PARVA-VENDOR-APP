@@ -4,7 +4,7 @@ import {
 } from 'firebase/firestore';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { auth, db } from './lib/firebase';
-import { VendorProfile, VendorBooking, VendorServiceItem, VendorKycData } from './types';
+import { VendorProfile, VendorBooking, VendorServiceItem, VendorKycData, VendorAddon } from './types';
 import { VendorAuth } from './components/VendorAuth';
 import { VendorOnboarding } from './components/VendorOnboarding';
 import { VendorDashboard } from './components/VendorDashboard';
@@ -170,11 +170,16 @@ export function App() {
     }
   };
 
-  const handleSaveServices = async (services: VendorServiceItem[]) => {
+  const handleSaveCatalog = async (data: {
+    services: VendorServiceItem[];
+    addons: VendorAddon[];
+    features: string[];
+    inclusions: string[];
+  }) => {
     if (!vendorProfile || !db) return;
     // Extract service images if any to update root images array for instant marketplace display
     const allImages = [...(vendorProfile.images || [])];
-    services.forEach(s => {
+    data.services.forEach(s => {
       if (s.images && Array.isArray(s.images)) {
         s.images.forEach(img => {
           if (img && !allImages.includes(img)) allImages.push(img);
@@ -183,13 +188,25 @@ export function App() {
     });
 
     await updateDoc(doc(db, 'vendors', vendorProfile.id), { 
-      services,
+      services: data.services,
+      addons: data.addons,
+      features: data.features,
+      inclusions: data.inclusions,
       images: allImages,
       updatedAt: new Date().toISOString()
     });
 
+    setVendorProfile(prev => prev ? {
+      ...prev,
+      services: data.services,
+      addons: data.addons,
+      features: data.features,
+      inclusions: data.inclusions,
+      images: allImages
+    } : null);
+
     setNotification({
-      message: '✨ Services & Catalog updated and synchronized to main marketplace!',
+      message: '✨ Services, Add-ons & Catalog updated and synchronized to main marketplace!',
       type: 'success'
     });
   };
@@ -375,7 +392,10 @@ export function App() {
         {activeTab === 'services' && (
           <VendorServicesManager
             services={vendorProfile.services || []}
-            onSaveServices={handleSaveServices}
+            addons={vendorProfile.addons || []}
+            features={vendorProfile.features || []}
+            inclusions={vendorProfile.inclusions || []}
+            onSaveCatalog={handleSaveCatalog}
             category={vendorProfile.category}
           />
         )}

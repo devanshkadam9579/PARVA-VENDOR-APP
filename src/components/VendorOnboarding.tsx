@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Sparkles, CheckCircle2, ArrowRight, ArrowLeft, Upload, 
   MapPin, Phone, Building2, Layers 
 } from 'lucide-react';
+import { db } from '../lib/firebase';
+import { collection, onSnapshot, doc } from 'firebase/firestore';
 import { VendorProfile } from '../types';
 
 export interface VendorOnboardingProps {
@@ -10,15 +12,49 @@ export interface VendorOnboardingProps {
   onComplete: (profile: Partial<VendorProfile>) => Promise<void>;
 }
 
-const CATEGORIES = [
+const DEFAULT_CATEGORIES = [
   'Catering', 'Decorators', 'Venues', 'DJ & Sound', 
   'Photography', 'Makeup Artists', 'Cake & Desserts', 'Event Planners'
 ];
 
-const CITIES = ['Kolhapur', 'Pune', 'Mumbai', 'Goa', 'Bangalore', 'Delhi NCR'];
+const DEFAULT_CITIES = ['Kolhapur', 'Pune', 'Mumbai', 'Goa', 'Bangalore', 'Delhi NCR', 'Nagpur', 'Nashik'];
 
 export function VendorOnboarding({ ownerUid, onComplete }: VendorOnboardingProps) {
   const [step, setStep] = useState(1);
+  const [categoriesList, setCategoriesList] = useState<string[]>(DEFAULT_CATEGORIES);
+  const [citiesList, setCitiesList] = useState<string[]>(DEFAULT_CITIES);
+
+  useEffect(() => {
+    if (!db) return;
+    const unsubCats = onSnapshot(collection(db, 'categories'), (snap) => {
+      const items = snap.docs
+        .map(d => d.data())
+        .filter((d: any) => d.status !== 'inactive')
+        .sort((a: any, b: any) => (Number(a.displayOrder) || 100) - (Number(b.displayOrder) || 100))
+        .map((d: any) => d.name || d.id);
+      if (items.length > 0) {
+        setCategoriesList(items);
+      }
+    });
+
+    const unsubCities = onSnapshot(doc(db, 'settings', 'cities'), (snap) => {
+      const data = snap.data();
+      const operational = Array.isArray(data?.operationalCities) && data.operationalCities.length > 0
+        ? data.operationalCities
+        : DEFAULT_CITIES;
+      const blocked = Array.isArray(data?.blockedCities) ? data.blockedCities : [];
+      const active = operational.filter((c: string) => !blocked.includes(c));
+      if (active.length > 0) {
+        setCitiesList(active);
+      }
+    });
+
+    return () => {
+      unsubCats();
+      unsubCities();
+    };
+  }, []);
+
   const [formData, setFormData] = useState({
     name: '',
     founderName: '',
@@ -129,7 +165,7 @@ export function VendorOnboarding({ ownerUid, onComplete }: VendorOnboardingProps
           <div className="space-y-4">
             <h3 className="text-sm font-extrabold text-gray-900">Select Primary Business Category</h3>
             <div className="grid grid-cols-2 gap-2.5">
-              {CATEGORIES.map((cat) => (
+              {categoriesList.map((cat) => (
                 <button
                   key={cat}
                   type="button"
@@ -185,7 +221,7 @@ export function VendorOnboarding({ ownerUid, onComplete }: VendorOnboardingProps
                 onChange={(e) => setFormData({ ...formData, location: e.target.value })}
                 className="w-full bg-[#faf5f8] border border-[#f2e4ec] rounded-xl p-3 text-xs font-semibold outline-none focus:border-brand-primary"
               >
-                {CITIES.map((city) => (
+                {citiesList.map((city) => (
                   <option key={city} value={city}>{city}</option>
                 ))}
               </select>

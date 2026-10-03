@@ -25,6 +25,7 @@ export interface VendorAddon {
   name: string;
   price: number;
   description: string;
+  status?: 'ACTIVE' | 'INACTIVE';
 }
 
 export interface VendorKycData {
@@ -71,6 +72,8 @@ export interface VendorProfile {
   services: VendorServiceItem[];
   packages?: VendorPackage[];
   addons?: VendorAddon[];
+  features?: string[];
+  inclusions?: string[];
   busyDates: string[];
   busySlots?: Record<string, string[]>;
   createdAt?: string;
