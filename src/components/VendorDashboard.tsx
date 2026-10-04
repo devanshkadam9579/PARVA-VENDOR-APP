@@ -44,11 +44,64 @@ export function VendorDashboard({
         <button
           type="button"
           onClick={() => onNavigate('availability')}
-          className="px-4 py-2 bg-brand-primary-light hover:bg-pink-100 text-brand-primary border border-brand-border text-xs font-extrabold rounded-xl transition"
+          className="px-4 py-2 bg-brand-primary-light hover:bg-pink-100 text-brand-primary border border-brand-border text-xs font-extrabold rounded-xl transition cursor-pointer"
         >
           Manage Calendar & Slots
         </button>
       </div>
+
+      {/* KYC Status Alert Card */}
+      {vendor.kyc?.status !== 'VERIFIED' && (
+        <div className={`p-5 rounded-3xl border shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 ${
+          vendor.kyc?.status === 'PENDING_VERIFICATION'
+            ? 'bg-amber-50/80 border-amber-200 text-amber-900'
+            : vendor.kyc?.status === 'REJECTED'
+            ? 'bg-rose-50/80 border-rose-200 text-rose-900'
+            : 'bg-rose-50/80 border-rose-200 text-rose-900'
+        }`}>
+          <div className="flex items-start gap-3.5">
+            <div className={`w-11 h-11 rounded-2xl flex items-center justify-center font-bold shrink-0 ${
+              vendor.kyc?.status === 'PENDING_VERIFICATION' 
+                ? 'bg-amber-100 text-amber-700' 
+                : 'bg-rose-100 text-rose-700'
+            }`}>
+              <ShieldCheck size={22} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                  vendor.kyc?.status === 'PENDING_VERIFICATION' 
+                    ? 'bg-amber-200/80 text-amber-900' 
+                    : 'bg-rose-200/80 text-rose-900'
+                }`}>
+                  KYC STATUS: {vendor.kyc?.status === 'PENDING_VERIFICATION' ? 'PENDING VERIFICATION' : vendor.kyc?.status === 'REJECTED' ? 'REJECTED' : 'INCOMPLETE'}
+                </span>
+              </div>
+              <h3 className="font-extrabold text-sm mt-1 text-[#1a0812]">
+                {vendor.kyc?.status === 'PENDING_VERIFICATION'
+                  ? 'Your identity documents are undergoing administrative verification'
+                  : 'Action Required: Submit KYC documents to unlock verified booking payouts'}
+              </h3>
+              <p className="text-xs text-[#745b68] mt-0.5">
+                {vendor.kyc?.status === 'PENDING_VERIFICATION'
+                  ? 'Our admin team reviews documents within 2-4 business hours.'
+                  : 'Please upload your Aadhaar, PAN card, and business registration proof to verify your account.'}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onNavigate('kyc')}
+            className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition shrink-0 cursor-pointer shadow-xs ${
+              vendor.kyc?.status === 'PENDING_VERIFICATION'
+                ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                : 'bg-rose-600 hover:bg-rose-700 text-white'
+            }`}
+          >
+            {vendor.kyc?.status === 'PENDING_VERIFICATION' ? 'Check KYC Status' : 'Complete KYC Now'}
+          </button>
+        </div>
+      )}
 
       {/* Metrics Row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

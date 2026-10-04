@@ -138,11 +138,11 @@ export function VendorKycManager({ vendor, onUpdateKyc }: VendorKycManagerProps)
               </div>
             )}
             {formData.status === 'NOT_SUBMITTED' && (
-              <div className="inline-flex items-center gap-2 bg-white/10 border border-white/20 px-4 py-2 rounded-2xl text-white/90 backdrop-blur-md">
-                <AlertTriangle className="w-5 h-5 text-amber-300" />
+              <div className="inline-flex items-center gap-2 bg-rose-500/20 border border-rose-400/40 px-4 py-2 rounded-2xl text-rose-100 backdrop-blur-md">
+                <AlertTriangle className="w-5 h-5 text-rose-300 animate-pulse" />
                 <div>
-                  <div className="text-xs font-black uppercase tracking-wider">Not Submitted</div>
-                  <div className="text-[10px] text-white/70">Action required</div>
+                  <div className="text-xs font-black uppercase tracking-wider">KYC INCOMPLETE</div>
+                  <div className="text-[10px] text-rose-200">Mandatory documents pending</div>
                 </div>
               </div>
             )}

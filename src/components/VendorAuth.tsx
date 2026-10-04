@@ -5,7 +5,8 @@ import {
   signInWithPopup, 
   sendPasswordResetEmail 
 } from 'firebase/auth';
-import { auth, googleProvider } from '../lib/firebase';
+import { auth, googleProvider, db } from '../lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
 import { Sparkles, Mail, Lock, User, ArrowRight, ShieldCheck } from 'lucide-react';
 
 export interface VendorAuthProps {
@@ -42,6 +43,20 @@ export function VendorAuth({ onAuthSuccess }: VendorAuthProps) {
     setLoading(true);
     try {
       const res = await createUserWithEmailAndPassword(auth, email, password);
+      if (db) {
+        try {
+          await setDoc(doc(db, 'users', res.user.uid), {
+            uid: res.user.uid,
+            email: email.trim(),
+            phone: phone.trim(),
+            name: businessName.trim(),
+            role: 'vendor',
+            createdAt: new Date().toISOString()
+          }, { merge: true });
+        } catch (uErr) {
+          console.warn('Initial user profile write note:', uErr);
+        }
+      }
       onAuthSuccess(res.user);
     } catch (err: any) {
       setErrorMsg(err.message || 'Registration failed');

@@ -25,6 +25,26 @@ import { authenticatedFetch } from './lib/apiClient';
 
 const BACKEND_API_URL = import.meta.env.VITE_BACKEND_API_URL || 'http://localhost:5000';
 
+export function isVendorProfileComplete(profile: VendorProfile | null | undefined): boolean {
+  if (!profile) return false;
+  const name = (profile.name || '').trim();
+  const phone = (profile.phone || '').trim().replace(/[^0-9]/g, '');
+  const email = (profile.email || '').trim();
+  const description = (profile.description || '').trim();
+  const category = (profile.category || '').trim();
+  const location = (profile.location || '').trim();
+
+  // Mandatory details: Business Name (>= 2 chars), Phone (>= 10 digits), Email (valid email), Info/Description (>= 10 chars)
+  const isNameComplete = name.length >= 2;
+  const isPhoneComplete = phone.length >= 10;
+  const isEmailComplete = email.length >= 5 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  const isDescComplete = description.length >= 10;
+  const isCategoryComplete = category.length > 0;
+  const isLocationComplete = location.length > 0;
+
+  return isNameComplete && isPhoneComplete && isEmailComplete && isDescComplete && isCategoryComplete && isLocationComplete;
+}
+
 export function App() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [vendorProfile, setVendorProfile] = useState<VendorProfile | null>(null);
@@ -104,15 +124,55 @@ export function App() {
 
   const handleCompleteOnboarding = async (profileData: Partial<VendorProfile>) => {
     if (!currentUser || !db) return;
-    const newVendorRef = doc(collection(db, 'vendors'));
-    const fullProfile = {
-      ...profileData,
-      id: newVendorRef.id,
-      ownerUid: currentUser.uid,
-      createdAt: new Date().toISOString()
-    };
-    await setDoc(newVendorRef, fullProfile);
-    setVendorProfile(fullProfile as VendorProfile);
+    
+    let targetId = vendorProfile?.id;
+    if (targetId) {
+      const vendorRef = doc(db, 'vendors', targetId);
+      const updatedProfile = {
+        ...vendorProfile,
+        ...profileData,
+        ownerUid: currentUser.uid,
+        status: 'ACTIVE' as const,
+        updatedAt: new Date().toISOString()
+      };
+      await updateDoc(vendorRef, updatedProfile);
+      setVendorProfile(updatedProfile as VendorProfile);
+    } else {
+      const newVendorRef = doc(collection(db, 'vendors'));
+      targetId = newVendorRef.id;
+      const fullProfile = {
+        ...profileData,
+        id: targetId,
+        ownerUid: currentUser.uid,
+        status: 'ACTIVE' as const,
+        kyc: {
+          status: 'NOT_SUBMITTED' as const
+        },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      await setDoc(newVendorRef, fullProfile);
+      setVendorProfile(fullProfile as VendorProfile);
+    }
+
+    // Dual-sync user document in 'users'
+    try {
+      await setDoc(doc(db, 'users', currentUser.uid), {
+        uid: currentUser.uid,
+        email: profileData.email || currentUser.email,
+        phone: profileData.phone || '',
+        name: profileData.name || '',
+        role: 'vendor',
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+    } catch (e) {
+      console.warn('Sync user document note:', e);
+    }
+
+    setNotification({
+      message: '✅ Business profile details saved successfully! Welcome to your Partner Workspace.',
+      type: 'success'
+    });
   };
 
   const handleAcceptBooking = async (bookingId: string) => {
@@ -259,17 +319,25 @@ export function App() {
     return <VendorAuth onAuthSuccess={(u) => setCurrentUser(u)} />;
   }
 
-  // Needs Onboarding
-  if (!vendorProfile) {
+  // Gating: Vendors without filling Phone, Email, Business Name, or Info cannot enter portal!
+  const isProfileComplete = isVendorProfileComplete(vendorProfile);
+
+  if (!vendorProfile || !isProfileComplete) {
     return (
       <VendorOnboarding
         ownerUid={currentUser.uid}
+        existingProfile={vendorProfile}
+        initialEmail={currentUser.email || ''}
+        initialPhone={currentUser.phoneNumber || ''}
+        initialName={currentUser.displayName || ''}
         onComplete={handleCompleteOnboarding}
+        onLogout={handleLogout}
       />
     );
   }
 
   const kycStatus = vendorProfile.kyc?.status || 'NOT_SUBMITTED';
+  const isKycVerified = kycStatus === 'VERIFIED';
 
   return (
     <div className="min-h-screen bg-[#faf5f8] text-[#1a0812] flex flex-col font-sans">
@@ -281,7 +349,7 @@ export function App() {
           <button 
             type="button" 
             onClick={() => setNotification(null)}
-            className="ml-3 text-white/80 hover:text-white text-xs underline"
+            className="ml-3 text-white/80 hover:text-white text-xs underline cursor-pointer"
           >
             Dismiss
           </button>
@@ -298,7 +366,7 @@ export function App() {
                 <span className="font-extrabold text-sm text-[#1a0812] tracking-tight font-display block leading-tight">
                   {vendorProfile.name}
                 </span>
-                {vendorProfile.isVerified && (
+                {isKycVerified && (
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" title="Verified Partner" />
                 )}
               </div>
@@ -314,7 +382,7 @@ export function App() {
                 key={tab}
                 type="button"
                 onClick={() => setActiveTab(tab)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold capitalize transition flex items-center gap-1.5 ${
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold capitalize transition flex items-center gap-1.5 cursor-pointer ${
                   activeTab === tab
                     ? 'bg-white text-brand-primary shadow-xs'
                     : 'text-[#745b68] hover:text-[#1a0812]'
@@ -322,11 +390,13 @@ export function App() {
               >
                 {tab === 'messages' && <MessageSquare size={13} />}
                 {tab === 'kyc' && (
-                  <ShieldCheck size={13} className={kycStatus === 'VERIFIED' ? 'text-emerald-500' : 'text-amber-500'} />
+                  <ShieldCheck size={13} className={isKycVerified ? 'text-emerald-500' : 'text-rose-500'} />
                 )}
                 <span>{tab === 'kyc' ? 'KYC Verification' : tab}</span>
-                {tab === 'kyc' && kycStatus !== 'VERIFIED' && (
-                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                {tab === 'kyc' && !isKycVerified && (
+                  <span className="px-1.5 py-0.2 bg-rose-100 text-rose-700 text-[9px] font-black rounded-md">
+                    {kycStatus === 'PENDING_VERIFICATION' ? 'Review' : 'Incomplete'}
+                  </span>
                 )}
               </button>
             ))}
@@ -336,20 +406,32 @@ export function App() {
             <button
               type="button"
               onClick={() => setActiveTab('kyc')}
-              className={`hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
-                kycStatus === 'VERIFIED' 
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : 'bg-amber-50 text-amber-800 border-amber-200'
+              className={`hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black border transition shadow-xs cursor-pointer ${
+                isKycVerified 
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                  : kycStatus === 'PENDING_VERIFICATION'
+                  ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                  : kycStatus === 'REJECTED'
+                  ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                  : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100 animate-pulse'
               }`}
             >
               <ShieldCheck className="w-3.5 h-3.5" />
-              <span>{kycStatus === 'VERIFIED' ? 'Verified Partner' : 'KYC Verification'}</span>
+              <span>
+                {isKycVerified 
+                  ? 'KYC VERIFIED' 
+                  : kycStatus === 'PENDING_VERIFICATION' 
+                  ? 'KYC UNDER REVIEW' 
+                  : kycStatus === 'REJECTED' 
+                  ? 'KYC REJECTED' 
+                  : 'KYC INCOMPLETE'}
+              </span>
             </button>
 
             <button
               type="button"
               onClick={handleLogout}
-              className="px-3.5 py-1.5 text-xs font-bold text-red-600 hover:bg-red-50 rounded-xl border border-red-200 transition flex items-center gap-1"
+              className="px-3.5 py-1.5 text-xs font-bold text-red-600 hover:bg-red-50 rounded-xl border border-red-200 transition flex items-center gap-1 cursor-pointer"
             >
               <LogOut size={13} />
               <span className="hidden sm:inline">Log Out</span>
@@ -357,6 +439,34 @@ export function App() {
           </div>
         </div>
       </header>
+
+      {/* Persistent KYC Status Alert Banner */}
+      {!isKycVerified && (
+        <div className={`px-4 py-2.5 text-xs font-bold flex flex-col sm:flex-row items-center justify-between gap-2 shadow-xs transition-all ${
+          kycStatus === 'PENDING_VERIFICATION'
+            ? 'bg-amber-500 text-white'
+            : kycStatus === 'REJECTED'
+            ? 'bg-rose-600 text-white'
+            : 'bg-gradient-to-r from-rose-600 to-amber-600 text-white'
+        }`}>
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-white shrink-0" />
+            <span>
+              <strong>KYC STATUS: {kycStatus === 'NOT_SUBMITTED' ? 'INCOMPLETE' : kycStatus === 'PENDING_VERIFICATION' ? 'UNDER REVIEW' : 'REJECTED'}</strong>
+              {kycStatus === 'NOT_SUBMITTED' && ' — Please upload your government ID (Aadhaar/PAN) & business documents to unlock booking payouts and the Verified Partner badge.'}
+              {kycStatus === 'PENDING_VERIFICATION' && ' — Documents submitted. Our administrative verification team is reviewing your profile.'}
+              {kycStatus === 'REJECTED' && ' — Verification rejected. Please review feedback and re-submit your documentation.'}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveTab('kyc')}
+            className="bg-white text-gray-900 px-3.5 py-1 rounded-xl text-xs font-black hover:bg-gray-100 transition shrink-0 cursor-pointer shadow-xs"
+          >
+            {kycStatus === 'NOT_SUBMITTED' ? 'Complete KYC Now' : 'Check KYC Status'}
+          </button>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full pb-24 md:pb-8">
