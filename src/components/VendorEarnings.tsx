@@ -1,19 +1,41 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { DollarSign, TrendingUp, Calendar, ShieldCheck } from 'lucide-react';
 import { VendorBooking } from '../types';
+import { db } from '../lib/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
 
 export interface VendorEarningsProps {
   bookings: VendorBooking[];
 }
 
 export function VendorEarnings({ bookings }: VendorEarningsProps) {
+  const [commissionPct, setCommissionPct] = useState<number>(10);
+
+  useEffect(() => {
+    if (!db) return;
+    const unsub = onSnapshot(doc(db, 'settings', 'global'), (snap) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        if (d.commissionPercentage !== undefined) {
+          setCommissionPct(Number(d.commissionPercentage));
+        }
+      }
+    }, (err) => {
+      console.warn('[VendorEarnings] Global settings sync info:', err.message);
+    });
+    return unsub;
+  }, []);
+
   const completedBookings = bookings.filter(b => b.status === 'Completed' || b.status === 'COMPLETED');
   const upcomingBookings = bookings.filter(b => b.status === 'Confirmed' || b.status === 'CONFIRMED');
 
   const grossCompleted = completedBookings.reduce((sum, b) => sum + (b.totalPrice || 0), 0);
   const grossUpcoming = upcomingBookings.reduce((sum, b) => sum + (b.totalPrice || 0), 0);
-  const totalCommission = Math.round((grossCompleted + grossUpcoming) * 0.05);
-  const netEarnings = (grossCompleted + grossUpcoming) - totalCommission;
+  const totalGross = grossCompleted + grossUpcoming;
+
+  // Compute platform commission dynamically
+  const totalCommission = Math.round((totalGross * commissionPct) / 100);
+  const netEarnings = Math.max(0, totalGross - totalCommission);
 
   return (
     <div className="space-y-6">
@@ -36,9 +58,11 @@ export function VendorEarnings({ bookings }: VendorEarningsProps) {
         </div>
 
         <div className="bg-white p-6 rounded-3xl border border-[#f2e4ec] shadow-xs space-y-1">
-          <span className="text-[10px] font-black uppercase text-gray-500 tracking-wider">Platform Commission (5%)</span>
+          <span className="text-[10px] font-black uppercase text-gray-500 tracking-wider">
+            Platform Commission ({commissionPct}%)
+          </span>
           <h3 className="text-3xl font-black text-gray-700">-₹{totalCommission.toLocaleString('en-IN')}</h3>
-          <p className="text-xs text-[#745b68]">Flat 5% direct matchmaking fee</p>
+          <p className="text-xs text-[#745b68]">Admin configured {commissionPct}% platform matchmaking fee</p>
         </div>
       </div>
 
