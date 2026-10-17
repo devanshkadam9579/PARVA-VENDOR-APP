@@ -41,10 +41,13 @@ export interface VendorKycData {
   contactPerson?: string;
   contactPhone?: string;
   profilePicUrl?: string;
-  status: 'NOT_SUBMITTED' | 'PENDING_VERIFICATION' | 'VERIFIED' | 'REJECTED';
+  status: 'NOT_SUBMITTED' | 'PENDING_VERIFICATION' | 'ACTION_REQUIRED' | 'VERIFIED' | 'REJECTED';
+  adminRemarks?: string;
   rejectionReason?: string;
   submittedAt?: string;
   verifiedAt?: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
 }
 
 export interface VendorProfile {

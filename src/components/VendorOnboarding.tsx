@@ -6,6 +6,7 @@ import {
 import { db } from '../lib/firebase';
 import { collection, onSnapshot, doc } from 'firebase/firestore';
 import { VendorProfile } from '../types';
+import { validateEmail, validateIndianPhone } from '../utils/validators';
 
 export interface VendorOnboardingProps {
   ownerUid: string;
@@ -113,13 +114,14 @@ export function VendorOnboarding({
         return false;
       }
     } else if (currentStep === 6) {
-      const cleanPhone = formData.phone.replace(/[^0-9]/g, '');
-      if (cleanPhone.length < 10) {
-        setErrorMsg('Valid 10-digit calling phone number is required.');
+      const phoneValidation = validateIndianPhone(formData.phone);
+      if (!phoneValidation.isValid) {
+        setErrorMsg(phoneValidation.error || 'Valid 10-digit Indian calling phone number is required.');
         return false;
       }
-      if (!formData.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
-        setErrorMsg('Valid official business email address is required.');
+      const emailValidation = validateEmail(formData.email);
+      if (!emailValidation.isValid) {
+        setErrorMsg(emailValidation.error || 'Valid official business email address is required.');
         return false;
       }
     }

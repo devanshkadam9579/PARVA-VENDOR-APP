@@ -285,25 +285,53 @@ export function App() {
   };
 
   const handleUpdateKyc = async (kycData: VendorKycData) => {
-    if (!vendorProfile || !db) return;
+    if (!vendorProfile) return;
     const now = new Date().toISOString();
 
-    // 1. Save full KYC payload to dedicated vendor_kyc collection (isolated doc)
-    await setDoc(doc(db, 'vendor_kyc', vendorProfile.id), {
-      ...kycData,
-      vendorId: vendorProfile.id,
-      vendorName: vendorProfile.name,
-      vendorCategory: vendorProfile.category,
-      updatedAt: now
-    }, { merge: true });
+    let clientWriteSuccess = false;
+    // 1. Try direct Firestore writes first
+    if (db) {
+      try {
+        await setDoc(doc(db, 'vendor_kyc', vendorProfile.id), {
+          ...kycData,
+          vendorId: vendorProfile.id,
+          vendorName: vendorProfile.name,
+          vendorCategory: vendorProfile.category,
+          updatedAt: now
+        }, { merge: true });
 
-    // 2. Save KYC summary & status to vendors collection
-    await updateDoc(doc(db, 'vendors', vendorProfile.id), {
-      kyc: kycData,
-      'kyc.status': kycData.status || 'PENDING_VERIFICATION',
-      updatedAt: now
-    });
+        await updateDoc(doc(db, 'vendors', vendorProfile.id), {
+          kyc: kycData,
+          'kyc.status': kycData.status || 'PENDING_VERIFICATION',
+          updatedAt: now
+        });
+        clientWriteSuccess = true;
+      } catch (clientErr: any) {
+        console.warn('[KYC Client Write Notice, using authoritative backend fallback]:', clientErr?.message || clientErr);
+      }
+    }
+
+    // 2. If client direct write encountered permission restriction, call authoritative backend
+    if (!clientWriteSuccess) {
+      const response = await authenticatedFetch(`${BACKEND_API_URL}/api/vendor/kyc/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vendorId: vendorProfile.id,
+          kycData
+        })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Failed to submit KYC documents via server.');
+      }
+    }
+
     setVendorProfile(prev => prev ? { ...prev, kyc: kycData } : null);
+    setNotification({
+      message: '📑 KYC Documents submitted successfully! Parva Admin team will review and verify your profile.',
+      type: 'success'
+    });
   };
 
   if (loading) {
@@ -411,6 +439,8 @@ export function App() {
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
                   : kycStatus === 'PENDING_VERIFICATION'
                   ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                  : kycStatus === 'ACTION_REQUIRED'
+                  ? 'bg-orange-50 text-orange-700 border-orange-200 hover:bg-orange-100 animate-pulse'
                   : kycStatus === 'REJECTED'
                   ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
                   : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100 animate-pulse'
@@ -422,6 +452,8 @@ export function App() {
                   ? 'KYC VERIFIED' 
                   : kycStatus === 'PENDING_VERIFICATION' 
                   ? 'KYC UNDER REVIEW' 
+                  : kycStatus === 'ACTION_REQUIRED'
+                  ? 'ACTION REQUIRED'
                   : kycStatus === 'REJECTED' 
                   ? 'KYC REJECTED' 
                   : 'KYC INCOMPLETE'}
@@ -445,6 +477,8 @@ export function App() {
         <div className={`px-4 py-2.5 text-xs font-bold flex flex-col sm:flex-row items-center justify-between gap-2 shadow-xs transition-all ${
           kycStatus === 'PENDING_VERIFICATION'
             ? 'bg-amber-500 text-white'
+            : kycStatus === 'ACTION_REQUIRED'
+            ? 'bg-orange-600 text-white'
             : kycStatus === 'REJECTED'
             ? 'bg-rose-600 text-white'
             : 'bg-gradient-to-r from-rose-600 to-amber-600 text-white'
@@ -452,9 +486,10 @@ export function App() {
           <div className="flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-white shrink-0" />
             <span>
-              <strong>KYC STATUS: {kycStatus === 'NOT_SUBMITTED' ? 'INCOMPLETE' : kycStatus === 'PENDING_VERIFICATION' ? 'UNDER REVIEW' : 'REJECTED'}</strong>
+              <strong>KYC STATUS: {kycStatus === 'NOT_SUBMITTED' ? 'INCOMPLETE' : kycStatus === 'PENDING_VERIFICATION' ? 'UNDER REVIEW' : kycStatus === 'ACTION_REQUIRED' ? 'ACTION REQUIRED' : 'REJECTED'}</strong>
               {kycStatus === 'NOT_SUBMITTED' && ' — Please upload your government ID (Aadhaar/PAN) & business documents to unlock booking payouts and the Verified Partner badge.'}
               {kycStatus === 'PENDING_VERIFICATION' && ' — Documents submitted. Our administrative verification team is reviewing your profile.'}
+              {kycStatus === 'ACTION_REQUIRED' && ' — Updates requested by Admin. Please review reviewer remarks and re-submit your documents.'}
               {kycStatus === 'REJECTED' && ' — Verification rejected. Please review feedback and re-submit your documentation.'}
             </span>
           </div>

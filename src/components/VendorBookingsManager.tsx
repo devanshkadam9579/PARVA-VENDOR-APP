@@ -67,12 +67,9 @@ export function VendorBookingsManager({
             const isCancelled = b.status === 'Cancelled' || b.status === 'CANCELLED' || b.status === 'REJECTED' || b.status === 'REFUNDED';
             const isCompleted = b.status === 'Completed' || b.status === 'COMPLETED';
 
-            const grossValue = b.totalPrice || b.amount || 0;
-            // Advance paid online (5% + 18% GST on platform fee)
-            const platformFee = Math.round(grossValue * 0.05);
-            const gstFee = Math.round(platformFee * 0.18);
-            const advancePaid = b.advancePaid || (platformFee + gstFee);
-            const remainingAmount = b.remainingAmount !== undefined ? b.remainingAmount : (grossValue - platformFee);
+            const grossValue = b.pricing?.servicesTotal || b.pricing?.subtotal || b.totalPrice || b.amount || 0;
+            const advancePaid = b.pricing?.finalAdvanceDue || b.pricing?.advanceAmount || b.advancePaid || Math.round(grossValue * 0.05 * 1.18);
+            const remainingAmount = b.pricing?.balanceDueAtEvent !== undefined ? b.pricing.balanceDueAtEvent : (b.pricing?.remainingAmount !== undefined ? b.pricing.remainingAmount : (b.remainingAmount !== undefined ? b.remainingAmount : (grossValue - Math.round(grossValue * 0.05))));
 
             return (
               <div

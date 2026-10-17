@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
@@ -7,14 +7,17 @@ import {
 } from 'firebase/auth';
 import { auth, googleProvider, db } from '../lib/firebase';
 import { doc, setDoc } from 'firebase/firestore';
-import { Sparkles, Mail, Lock, User, ArrowRight, ShieldCheck } from 'lucide-react';
+import { Sparkles, Mail, Lock, User, ArrowRight, ShieldCheck, KeyRound, ArrowLeft, Loader2 } from 'lucide-react';
+import { validateEmail, validateIndianPhone } from '../utils/validators';
+
+const BACKEND_API_URL = import.meta.env.VITE_BACKEND_API_URL || (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:5000' : 'https://parava-backend-1.onrender.com');
 
 export interface VendorAuthProps {
   onAuthSuccess: (user: any) => void;
 }
 
 export function VendorAuth({ onAuthSuccess }: VendorAuthProps) {
-  const [mode, setMode] = useState<'signin' | 'signup' | 'forgot'>('signin');
+  const [mode, setMode] = useState<'signin' | 'signup' | 'forgot' | 'verify_otp'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [businessName, setBusinessName] = useState('');
@@ -22,6 +25,24 @@ export function VendorAuth({ onAuthSuccess }: VendorAuthProps) {
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // OTP Verification States
+  const [otp, setOtp] = useState('');
+  const [otpTimer, setOtpTimer] = useState(0);
+  const [validatedCredentials, setValidatedCredentials] = useState<{ email: string; phone: string; businessName: string } | null>(null);
+
+  // OTP Countdown timer
+  useEffect(() => {
+    let interval: any = null;
+    if (otpTimer > 0) {
+      interval = setInterval(() => {
+        setOtpTimer((prev) => (prev > 0 ? prev - 1 : 0));
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [otpTimer]);
 
   const handleEmailSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,17 +61,114 @@ export function VendorAuth({ onAuthSuccess }: VendorAuthProps) {
   const handleEmailSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
+
+    const trimmedName = businessName.trim();
+    const trimmedEmail = email.trim();
+    const trimmedPhone = phone.trim();
+
+    if (!trimmedName || trimmedName.length < 2) {
+      setErrorMsg('Please enter your business / brand name (min 2 characters).');
+      return;
+    }
+
+    // Strict Email Validation
+    const emailValidation = validateEmail(trimmedEmail);
+    if (!emailValidation.isValid) {
+      setErrorMsg(emailValidation.error || 'Please enter a valid business email.');
+      return;
+    }
+
+    // Strict Indian Phone Validation
+    const phoneValidation = validateIndianPhone(trimmedPhone);
+    if (!phoneValidation.isValid) {
+      setErrorMsg(phoneValidation.error || 'Please enter a valid 10-digit Indian mobile number.');
+      return;
+    }
+
+    if (!password || password.length < 6) {
+      setErrorMsg('Password must be at least 6 characters.');
+      return;
+    }
+
     setLoading(true);
+
     try {
-      const res = await createUserWithEmailAndPassword(auth, email, password);
+      // 1. Dispatch authoritative verification OTP to vendor email
+      const res = await fetch(`${BACKEND_API_URL}/api/auth/send-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: emailValidation.cleanedValue,
+          phone: phoneValidation.cleanedValue,
+          name: trimmedName,
+          purpose: 'Vendor Partner Registration'
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to dispatch verification OTP. Please try again.');
+      }
+
+      setValidatedCredentials({
+        email: emailValidation.cleanedValue!,
+        phone: phoneValidation.cleanedValue!,
+        businessName: trimmedName
+      });
+      setOtp('');
+      setOtpTimer(60);
+      setSuccessMsg(data.message || `Verification OTP sent to ${emailValidation.cleanedValue}.`);
+      setMode('verify_otp');
+    } catch (err: any) {
+      console.error('Vendor send OTP error:', err);
+      setErrorMsg(err.message || 'Could not send verification OTP. Please check your connection.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyOtpAndSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (loading || !validatedCredentials) return;
+
+    const cleanOtp = otp.trim();
+    if (!cleanOtp || cleanOtp.length !== 6) {
+      setErrorMsg('Please enter the complete 6-digit OTP code.');
+      return;
+    }
+
+    setLoading(true);
+    setErrorMsg('');
+
+    try {
+      // 1. Verify OTP with authoritative backend
+      const verifyRes = await fetch(`${BACKEND_API_URL}/api/auth/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: validatedCredentials.email,
+          phone: validatedCredentials.phone,
+          otp: cleanOtp
+        })
+      });
+
+      const verifyData = await verifyRes.json();
+      if (!verifyRes.ok || !verifyData.success) {
+        throw new Error(verifyData.error || 'Invalid OTP code. Please check and try again.');
+      }
+
+      // 2. Create authoritative Firebase account after successful OTP verification
+      const res = await createUserWithEmailAndPassword(auth, validatedCredentials.email, password);
       if (db) {
         try {
           await setDoc(doc(db, 'users', res.user.uid), {
             uid: res.user.uid,
-            email: email.trim(),
-            phone: phone.trim(),
-            name: businessName.trim(),
+            email: validatedCredentials.email,
+            phone: validatedCredentials.phone,
+            name: validatedCredentials.businessName,
             role: 'vendor',
+            emailVerified: true,
+            phoneVerified: true,
             createdAt: new Date().toISOString()
           }, { merge: true });
         } catch (uErr) {
@@ -59,7 +177,36 @@ export function VendorAuth({ onAuthSuccess }: VendorAuthProps) {
       }
       onAuthSuccess(res.user);
     } catch (err: any) {
+      console.error('Vendor OTP Verification / Signup error:', err);
       setErrorMsg(err.message || 'Registration failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    if (loading || otpTimer > 0 || !validatedCredentials) return;
+    setLoading(true);
+    setErrorMsg('');
+    try {
+      const res = await fetch(`${BACKEND_API_URL}/api/auth/send-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: validatedCredentials.email,
+          phone: validatedCredentials.phone,
+          name: validatedCredentials.businessName,
+          purpose: 'Vendor Partner Registration'
+        })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Could not resend OTP.');
+      }
+      setOtpTimer(60);
+      setSuccessMsg(`New verification code sent to ${validatedCredentials.email}.`);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to resend verification OTP.');
     } finally {
       setLoading(false);
     }
@@ -203,18 +350,19 @@ export function VendorAuth({ onAuthSuccess }: VendorAuthProps) {
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-bold text-[#1a0812] block">Contact Phone / WhatsApp</label>
+              <label className="text-xs font-bold text-[#1a0812] block">Contact Mobile (10 Digits) *</label>
               <input
                 type="tel"
+                maxLength={10}
                 required
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="+91 98765 43210"
+                onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
+                placeholder="e.g. 9876543210"
                 className="w-full bg-[#faf5f8] border border-[#f2e4ec] rounded-xl p-3 text-xs font-semibold outline-none focus:border-brand-primary"
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-bold text-[#1a0812] block">Email Address</label>
+              <label className="text-xs font-bold text-[#1a0812] block">Business Email *</label>
               <input
                 type="email"
                 required
@@ -235,13 +383,86 @@ export function VendorAuth({ onAuthSuccess }: VendorAuthProps) {
                 className="w-full bg-[#faf5f8] border border-[#f2e4ec] rounded-xl p-3 text-xs font-semibold outline-none focus:border-brand-primary"
               />
             </div>
+
+            <div className="p-3 bg-amber-50/70 border border-amber-200/60 rounded-xl flex items-center gap-2 text-[11px] text-amber-800">
+              <ShieldCheck size={16} className="text-amber-600 shrink-0" />
+              <span>A secure 6-digit OTP will be sent to your email to verify and activate your partner account.</span>
+            </div>
+
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-brand-primary hover:bg-brand-primary-dark text-white font-extrabold text-xs py-3.5 rounded-xl shadow-md transition active:scale-95 disabled:opacity-50"
+              className="w-full bg-brand-primary hover:bg-brand-primary-dark text-white font-extrabold text-xs py-3.5 rounded-xl shadow-md transition active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
             >
-              {loading ? 'Creating Account...' : 'Register Partner Account'}
+              {loading && <Loader2 size={16} className="animate-spin" />}
+              <span>{loading ? 'Sending OTP...' : 'Verify with OTP & Register'}</span>
             </button>
+          </form>
+        )}
+
+        {/* 2.1 OTP Verification Step */}
+        {mode === 'verify_otp' && (
+          <form onSubmit={handleVerifyOtpAndSignUp} className="space-y-4">
+            <div className="bg-brand-primary-light/40 border border-brand-primary/20 rounded-2xl p-4 text-center space-y-1">
+              <div className="w-10 h-10 bg-brand-primary-light text-brand-primary rounded-full flex items-center justify-center mx-auto mb-2">
+                <KeyRound size={20} />
+              </div>
+              <h4 className="text-sm font-black text-[#1a0812]">Enter Verification Code</h4>
+              <p className="text-xs text-[#745b68] leading-relaxed">
+                We sent a 6-digit OTP code to <b className="text-[#1a0812]">{validatedCredentials?.email}</b>
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-[#1a0812] text-center uppercase tracking-wider">
+                6-Digit OTP Code
+              </label>
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={6}
+                required
+                placeholder="• • • • • •"
+                value={otp}
+                onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+                disabled={loading}
+                autoFocus
+                className="w-full h-14 bg-[#faf5f8] border-2 border-[#f2e4ec] rounded-2xl text-center text-2xl font-black font-mono tracking-[10px] text-[#1a0812] outline-none focus:bg-white focus:border-brand-primary transition disabled:opacity-50"
+              />
+              <p className="text-[11px] text-gray-400 text-center">
+                Check your business email for the OTP code
+              </p>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading || otp.length !== 6}
+              className="w-full bg-brand-primary hover:bg-brand-primary-dark text-white font-extrabold text-xs py-3.5 rounded-xl shadow-md transition active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {loading && <Loader2 size={16} className="animate-spin" />}
+              <span>{loading ? 'Verifying OTP...' : 'Verify OTP & Activate Account'}</span>
+            </button>
+
+            <div className="flex items-center justify-between text-xs pt-1 px-1">
+              <button
+                type="button"
+                onClick={() => { setMode('signup'); setErrorMsg(''); }}
+                className="font-bold text-[#745b68] hover:text-[#1a0812] flex items-center gap-1 cursor-pointer"
+              >
+                <ArrowLeft size={14} />
+                <span>Edit details</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={loading || otpTimer > 0}
+                onClick={handleResendOtp}
+                className="font-bold text-brand-primary hover:underline disabled:text-gray-400 cursor-pointer disabled:cursor-not-allowed"
+              >
+                {otpTimer > 0 ? `Resend code in ${otpTimer}s` : 'Resend OTP Code'}
+              </button>
+            </div>
           </form>
         )}
 

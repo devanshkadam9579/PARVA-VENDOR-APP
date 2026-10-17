@@ -1,11 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   ShieldCheck, Upload, CheckCircle2, AlertCircle, FileText, 
-  User, Phone, MapPin, Building, CreditCard, Image as ImageIcon,
-  Clock, AlertTriangle, Eye, Check
+  User, Building, CreditCard, Clock, AlertTriangle, Eye, Check,
+  Loader2, RefreshCw, X
 } from 'lucide-react';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { db } from '../lib/firebase';
+import { authenticatedFetch } from '../lib/apiClient';
 import { VendorKycData, VendorProfile } from '../types';
 import { compressImage } from '../lib/imageCompressor';
+
+const BACKEND_API_URL = import.meta.env.VITE_BACKEND_API_URL || 'http://localhost:5000';
 
 export interface VendorKycManagerProps {
   vendor: VendorProfile;
@@ -31,43 +36,89 @@ export function VendorKycManager({ vendor, onUpdateKyc }: VendorKycManagerProps)
 
   const [formData, setFormData] = useState<VendorKycData>(initialKyc);
   const [saving, setSaving] = useState(false);
-  const [compressingField, setCompressingField] = useState<string | null>(null);
+  const [uploadingField, setUploadingField] = useState<string | null>(null);
   const [compressionStats, setCompressionStats] = useState<Record<string, string>>({});
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState('');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+
+  // Real-time synchronization with authoritative vendor_kyc collection
+  useEffect(() => {
+    if (!vendor?.id || !db) return;
+    const unsub = onSnapshot(doc(db, 'vendor_kyc', vendor.id), (snap) => {
+      if (snap.exists()) {
+        const kycDoc = snap.data() as VendorKycData;
+        setFormData(prev => ({
+          ...prev,
+          ...kycDoc,
+          status: kycDoc.status || prev.status
+        }));
+      }
+    }, (err) => {
+      console.warn('[VendorKycManager] Real-time sync note:', err);
+    });
+    return () => unsub();
+  }, [vendor?.id]);
+
+  // Sync if parent profile kyc changes
+  useEffect(() => {
+    if (vendor?.kyc) {
+      setFormData(prev => ({
+        ...prev,
+        ...vendor.kyc,
+        status: vendor.kyc?.status || prev.status
+      }));
+    }
+  }, [vendor?.kyc]);
 
   const handleFileUpload = async (field: keyof VendorKycData, e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setCompressingField(field);
+    // Reset input so re-selecting same file triggers change
+    e.target.value = '';
+
+    setUploadingField(field as string);
+    setUploadError(null);
+    setSuccessMsg('');
+
     try {
-      // Compress image from 5MB-10MB to ~40-60KB safely
+      // 1. Browser-side compression to ~40-60KB
       const result = await compressImage(file, { maxWidth: 1200, maxHeight: 1200, quality: 0.72 });
       const origKb = Math.round(result.originalSizeBytes / 1024);
       const compKb = Math.round(result.compressedSizeBytes / 1024);
-      
+
+      // 2. Real Cloudinary upload via backend API
+      const res = await authenticatedFetch(`${BACKEND_API_URL}/api/upload/image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image: result.dataUrl,
+          folder: 'parva_kyc_docs'
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success || !data.url) {
+        throw new Error(data.error || 'Failed to upload document to secure storage. Please retry.');
+      }
+
+      const secureUrl = data.url;
+
       setFormData(prev => ({
         ...prev,
-        [field]: result.dataUrl
+        [field]: secureUrl
       }));
+
       setCompressionStats(prev => ({
         ...prev,
-        [field]: `${origKb}KB → ${compKb}KB (-${result.reductionPercentage}%)`
+        [field as string]: `${origKb}KB → ${compKb}KB (-${result.reductionPercentage}%) • Uploaded`
       }));
-    } catch (err) {
-      console.error('Image compression error:', err);
-      // Fallback
-      const reader = new FileReader();
-      reader.onload = () => {
-        setFormData(prev => ({
-          ...prev,
-          [field]: reader.result as string
-        }));
-      };
-      reader.readAsDataURL(file);
+    } catch (err: any) {
+      console.error('Document upload error:', err);
+      setUploadError(`Failed to upload ${field}: ${err.message || 'Network error'}`);
     } finally {
-      setCompressingField(null);
+      setUploadingField(null);
     }
   };
 
@@ -75,6 +126,14 @@ export function VendorKycManager({ vendor, onUpdateKyc }: VendorKycManagerProps)
     e.preventDefault();
     setSaving(true);
     setSuccessMsg('');
+    setUploadError(null);
+
+    // Validation: Aadhaar front/back and PAN are mandatory
+    if (!formData.aadhaarFrontUrl || !formData.aadhaarBackUrl || !formData.panUrl) {
+      setUploadError('Please upload front and back photos of your Aadhaar Card and your PAN Card before submitting.');
+      setSaving(false);
+      return;
+    }
 
     try {
       const submission: VendorKycData = {
@@ -86,7 +145,7 @@ export function VendorKycManager({ vendor, onUpdateKyc }: VendorKycManagerProps)
       setFormData(submission);
       setSuccessMsg('KYC Documents submitted successfully! Parva Admin team will review and verify your profile.');
     } catch (err: any) {
-      alert('Failed to submit KYC documents: ' + (err.message || 'Unknown error'));
+      setUploadError('Failed to submit KYC documents: ' + (err.message || 'Unknown error'));
     } finally {
       setSaving(false);
     }
@@ -128,6 +187,15 @@ export function VendorKycManager({ vendor, onUpdateKyc }: VendorKycManagerProps)
                 </div>
               </div>
             )}
+            {formData.status === 'ACTION_REQUIRED' && (
+              <div className="inline-flex items-center gap-2 bg-amber-500/30 border border-amber-400 px-4 py-2 rounded-2xl text-amber-100 backdrop-blur-md">
+                <AlertCircle className="w-5 h-5 text-amber-300 animate-pulse" />
+                <div>
+                  <div className="text-xs font-black uppercase tracking-wider">Action Required</div>
+                  <div className="text-[10px] text-amber-200">Updates requested</div>
+                </div>
+              </div>
+            )}
             {formData.status === 'REJECTED' && (
               <div className="inline-flex items-center gap-2 bg-rose-500/20 border border-rose-400/40 px-4 py-2 rounded-2xl text-rose-100 backdrop-blur-md">
                 <AlertCircle className="w-5 h-5 text-rose-400" />
@@ -150,16 +218,47 @@ export function VendorKycManager({ vendor, onUpdateKyc }: VendorKycManagerProps)
         </div>
       </div>
 
-      {formData.status === 'REJECTED' && formData.rejectionReason && (
-        <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex items-start gap-3">
-          <AlertCircle className="w-5 h-5 text-rose-600 mt-0.5 shrink-0" />
-          <div>
-            <h4 className="text-sm font-bold text-rose-900">Admin Rejection Notice:</h4>
-            <p className="text-xs text-rose-700 mt-0.5">{formData.rejectionReason}</p>
+      {/* Action Required Banner */}
+      {formData.status === 'ACTION_REQUIRED' && (
+        <div className="bg-amber-50 border border-amber-300 rounded-3xl p-5 flex items-start gap-3.5 shadow-xs">
+          <AlertCircle className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
+          <div className="space-y-1">
+            <h4 className="text-sm font-black text-amber-900">Action Required: Document Updates Requested by Admin</h4>
+            <p className="text-xs text-amber-800 font-medium">
+              {formData.adminRemarks || 'The Parva Trust & Safety team requested corrections on your submitted KYC documentation. Please update the necessary documents below and re-submit.'}
+            </p>
+            {formData.reviewedAt && (
+              <p className="text-[11px] text-amber-700/80">Reviewed on {new Date(formData.reviewedAt).toLocaleString()}</p>
+            )}
           </div>
         </div>
       )}
 
+      {/* Rejection Banner */}
+      {formData.status === 'REJECTED' && (
+        <div className="bg-rose-50 border border-rose-300 rounded-3xl p-5 flex items-start gap-3.5 shadow-xs">
+          <AlertCircle className="w-5 h-5 text-rose-600 mt-0.5 shrink-0" />
+          <div className="space-y-1">
+            <h4 className="text-sm font-black text-rose-900">KYC Verification Rejected</h4>
+            <p className="text-xs text-rose-800 font-medium">
+              {formData.adminRemarks || formData.rejectionReason || 'Your verification documents did not meet our verification guidelines. Please upload clear, government-issued originals and re-submit.'}
+            </p>
+            {formData.reviewedAt && (
+              <p className="text-[11px] text-rose-700/80">Decision recorded on {new Date(formData.reviewedAt).toLocaleString()}</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Error Alert */}
+      {uploadError && (
+        <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+          <p className="text-xs font-bold text-rose-800">{uploadError}</p>
+        </div>
+      )}
+
+      {/* Success Alert */}
       {successMsg && (
         <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex items-center gap-3">
           <Check className="w-5 h-5 text-emerald-600 shrink-0" />
@@ -237,12 +336,17 @@ export function VendorKycManager({ vendor, onUpdateKyc }: VendorKycManagerProps)
                 )}
                 <div>
                   <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-xs font-bold text-gray-700 transition">
-                    <Upload className="w-4 h-4" />
-                    <span>Upload Photo</span>
+                    {uploadingField === 'profilePicUrl' ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-brand-primary" />
+                    ) : (
+                      <Upload className="w-4 h-4" />
+                    )}
+                    <span>{uploadingField === 'profilePicUrl' ? 'Uploading...' : 'Upload Photo'}</span>
                     <input
                       type="file"
                       accept="image/*"
                       className="hidden"
+                      disabled={uploadingField !== null}
                       onChange={e => handleFileUpload('profilePicUrl', e)}
                     />
                   </label>
@@ -278,7 +382,7 @@ export function VendorKycManager({ vendor, onUpdateKyc }: VendorKycManagerProps)
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Aadhaar Front */}
-              <div className="border border-dashed border-gray-300 rounded-2xl p-4 bg-gray-50/50 hover:bg-gray-50 transition">
+              <div className="border border-dashed border-gray-300 rounded-2xl p-4 bg-gray-50/50 hover:bg-gray-50 transition relative">
                 <span className="block text-xs font-bold text-gray-700 mb-2">Aadhaar Front Side <span className="text-red-500">*</span></span>
                 {formData.aadhaarFrontUrl ? (
                   <div className="relative group rounded-xl overflow-hidden border border-gray-200">
@@ -297,20 +401,33 @@ export function VendorKycManager({ vendor, onUpdateKyc }: VendorKycManagerProps)
                     <span className="text-xs">No Front Image Uploaded</span>
                   </div>
                 )}
+                {compressionStats['aadhaarFrontUrl'] && (
+                  <p className="text-[10px] text-emerald-600 font-bold mt-1.5">{compressionStats['aadhaarFrontUrl']}</p>
+                )}
                 <label className="mt-3 cursor-pointer w-full py-2 px-3 rounded-xl bg-white border border-gray-300 hover:border-brand-primary text-xs font-bold text-gray-700 text-center flex items-center justify-center gap-1.5 transition">
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>{formData.aadhaarFrontUrl ? 'Change Front Photo' : 'Upload Aadhaar Front'}</span>
+                  {uploadingField === 'aadhaarFrontUrl' ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-primary" />
+                      <span>Uploading to Secure Storage...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>{formData.aadhaarFrontUrl ? 'Change Front Photo' : 'Upload Aadhaar Front'}</span>
+                    </>
+                  )}
                   <input
                     type="file"
                     accept="image/*"
                     className="hidden"
+                    disabled={uploadingField !== null}
                     onChange={e => handleFileUpload('aadhaarFrontUrl', e)}
                   />
                 </label>
               </div>
 
               {/* Aadhaar Back */}
-              <div className="border border-dashed border-gray-300 rounded-2xl p-4 bg-gray-50/50 hover:bg-gray-50 transition">
+              <div className="border border-dashed border-gray-300 rounded-2xl p-4 bg-gray-50/50 hover:bg-gray-50 transition relative">
                 <span className="block text-xs font-bold text-gray-700 mb-2">Aadhaar Back Side <span className="text-red-500">*</span></span>
                 {formData.aadhaarBackUrl ? (
                   <div className="relative group rounded-xl overflow-hidden border border-gray-200">
@@ -329,13 +446,26 @@ export function VendorKycManager({ vendor, onUpdateKyc }: VendorKycManagerProps)
                     <span className="text-xs">No Back Image Uploaded</span>
                   </div>
                 )}
+                {compressionStats['aadhaarBackUrl'] && (
+                  <p className="text-[10px] text-emerald-600 font-bold mt-1.5">{compressionStats['aadhaarBackUrl']}</p>
+                )}
                 <label className="mt-3 cursor-pointer w-full py-2 px-3 rounded-xl bg-white border border-gray-300 hover:border-brand-primary text-xs font-bold text-gray-700 text-center flex items-center justify-center gap-1.5 transition">
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>{formData.aadhaarBackUrl ? 'Change Back Photo' : 'Upload Aadhaar Back'}</span>
+                  {uploadingField === 'aadhaarBackUrl' ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-primary" />
+                      <span>Uploading to Secure Storage...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>{formData.aadhaarBackUrl ? 'Change Back Photo' : 'Upload Aadhaar Back'}</span>
+                    </>
+                  )}
                   <input
                     type="file"
                     accept="image/*"
                     className="hidden"
+                    disabled={uploadingField !== null}
                     onChange={e => handleFileUpload('aadhaarBackUrl', e)}
                   />
                 </label>
@@ -403,15 +533,28 @@ export function VendorKycManager({ vendor, onUpdateKyc }: VendorKycManagerProps)
                 )}
                 <div>
                   <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-gray-300 hover:border-brand-primary text-xs font-bold text-gray-700 transition">
-                    <Upload className="w-4 h-4" />
-                    <span>{formData.panUrl ? 'Change PAN Photo' : 'Upload PAN Card Photo'}</span>
+                    {uploadingField === 'panUrl' ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-brand-primary" />
+                        <span>Uploading to Secure Storage...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="w-4 h-4" />
+                        <span>{formData.panUrl ? 'Change PAN Photo' : 'Upload PAN Card Photo'}</span>
+                      </>
+                    )}
                     <input
                       type="file"
                       accept="image/*"
                       className="hidden"
+                      disabled={uploadingField !== null}
                       onChange={e => handleFileUpload('panUrl', e)}
                     />
                   </label>
+                  {compressionStats['panUrl'] && (
+                    <p className="text-[10px] text-emerald-600 font-bold mt-1">{compressionStats['panUrl']}</p>
+                  )}
                   <p className="text-[11px] text-gray-400 mt-1">Please ensure PAN number, name and DOB are clearly legible.</p>
                 </div>
               </div>
@@ -462,15 +605,28 @@ export function VendorKycManager({ vendor, onUpdateKyc }: VendorKycManagerProps)
                 )}
                 <div>
                   <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-gray-300 hover:border-brand-primary text-xs font-bold text-gray-700 transition">
-                    <Upload className="w-4 h-4" />
-                    <span>{formData.licenseUrl ? 'Change License File' : 'Upload Business License'}</span>
+                    {uploadingField === 'licenseUrl' ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-brand-primary" />
+                        <span>Uploading to Secure Storage...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="w-4 h-4" />
+                        <span>{formData.licenseUrl ? 'Change License File' : 'Upload Business License'}</span>
+                      </>
+                    )}
                     <input
                       type="file"
                       accept="image/*"
                       className="hidden"
+                      disabled={uploadingField !== null}
                       onChange={e => handleFileUpload('licenseUrl', e)}
                     />
                   </label>
+                  {compressionStats['licenseUrl'] && (
+                    <p className="text-[10px] text-emerald-600 font-bold mt-1">{compressionStats['licenseUrl']}</p>
+                  )}
                   <p className="text-[11px] text-gray-400 mt-1">Caterers, decorators, venue owners are advised to attach their trade license.</p>
                 </div>
               </div>
@@ -485,13 +641,18 @@ export function VendorKycManager({ vendor, onUpdateKyc }: VendorKycManagerProps)
           </p>
           <button
             type="submit"
-            disabled={saving}
-            className="w-full sm:w-auto px-8 py-3.5 rounded-2xl bg-brand-primary text-white font-bold text-sm shadow-md hover:bg-[#79194a] transition flex items-center justify-center gap-2 disabled:opacity-60"
+            disabled={saving || uploadingField !== null}
+            className="w-full sm:w-auto px-8 py-3.5 rounded-2xl bg-brand-primary text-white font-bold text-sm shadow-md hover:bg-[#79194a] transition flex items-center justify-center gap-2 disabled:opacity-60 cursor-pointer"
           >
             {saving ? (
               <>
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                <Loader2 className="w-4 h-4 animate-spin" />
                 <span>Submitting for Verification...</span>
+              </>
+            ) : formData.status === 'ACTION_REQUIRED' ? (
+              <>
+                <RefreshCw className="w-4 h-4" />
+                <span>Re-Submit Corrected KYC</span>
               </>
             ) : (
               <>
@@ -512,9 +673,9 @@ export function VendorKycManager({ vendor, onUpdateKyc }: VendorKycManagerProps)
               <button 
                 type="button" 
                 onClick={() => setPreviewImage(null)}
-                className="text-gray-400 hover:text-white text-xs font-bold px-2 py-1 rounded bg-white/10"
+                className="text-gray-400 hover:text-white p-1 rounded-lg bg-white/10 transition"
               >
-                Close
+                <X className="w-4 h-4" />
               </button>
             </div>
             <div className="p-4 flex items-center justify-center bg-gray-100 max-h-[80vh] overflow-auto">
